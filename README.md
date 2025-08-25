@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# Read-only, parallel, DG-scoped PAN workflow with logs & stitched report
+# Read-only, parallel, all-firewalls PAN workflow with DG star + stitched report
+# Legend: in the per-firewall table, a "★" before the firewall name means:
+#         "This firewall's device-group has rules that reference the IP's address object(s)."
 
 import os
 import logging
@@ -14,8 +16,9 @@ PASSWORD = "REPLACE_ME"
 # List as many IPs as you want to check
 IPS_TO_CHECK = [
     "10.232.64.10",
-    # "10.1.2.3",
-    # "10.4.5.6",
+    "10.212.64.10",
+    "10.232.68.162",
+    "10.212.68.162",
 ]
 
 PANORAMA_HOST = "10.232.240.150"   # Panorama
@@ -36,8 +39,7 @@ FIREWALLS = {
     "10.212.240.157": "FBCH03VPFW001",
 }
 
-# Map device-group name -> list of firewall mgmt IPs to check
-# (Edit to match your Panorama DG names.)
+# Map device-group name -> list of firewall mgmt IPs
 DG_TO_FIREWALLS = {
     "FBAS21INFW": ["10.232.240.151"],
     "FBAS21NPFW": ["10.232.240.161"],
@@ -57,7 +59,7 @@ DG_TO_FIREWALLS = {
 VR_CANDIDATES = ["default", "VR-1", "vr1", "trust-vr", "untrust-vr"]
 
 # Concurrency for firewall checks
-MAX_WORKERS = 8
+MAX_WORKERS = 10
 
 # Logging
 LOG_DIR = "./logs"
@@ -101,7 +103,7 @@ def connect_panos(host, title=""):
     }
     try:
         conn = ConnectHandler(**info)
-        # Set once at session start (do NOT repeat inside config-mode to avoid “Invalid syntax” on some images)
+        # set once at session start (avoid "Invalid syntax" inside config-mode on some images)
         conn.send_command("set cli config-output-format set", expect_string=r">|#")
         conn.send_command("set cli pager off", expect_string=r">|#")
         conn.send_command("set cli terminal width 500", expect_string=r">|#")
@@ -116,7 +118,6 @@ def pano_get_address_objects_for_ip(conn, ip):
     """Return [{'name': NAME, 'scope': 'shared'|'device-group <DG>'}, ...]"""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
-    # Don't send 'set cli config-output-format set' here (some versions reject it in config mode)
     out = conn.send_command(f"show | match {ip}", expect_string=r"#", read_timeout=90)
     conn.exit_config_mode()
 
@@ -298,19 +299,19 @@ def fw_worker(fw_ip, fw_name, ip):
         return {"fw": fw_name, "ip": fw_ip, "vr": "<error>", "iface": "<error>", "zone": "<error>", "err": str(e)}
 
 
-def map_dgs_to_firewalls(dg_names):
-    """Resolve which firewall IPs to check from a set of DG names."""
-    targets = set()
-    for dg in dg_names:
-        if dg in DG_TO_FIREWALLS:
-            for ip in DG_TO_FIREWALLS[dg]:
-                targets.add(ip)
-        else:
-            # Best-effort guess: any FW whose friendly name contains the DG token
-            for ip, fname in FIREWALLS.items():
-                if dg in fname:
-                    targets.add(ip)
-    return sorted(targets)
+def dgs_for_rule_refs(rule_refs):
+    """Return a set of DG names present in rule refs."""
+    return {r["dg"] for r in rule_refs}
+
+
+def starred_fw_ips_from_dgs(rule_dgs):
+    """Union of FW IPs for the DGs that have rules."""
+    starred = set()
+    for dg in rule_dgs:
+        ips = DG_TO_FIREWALLS.get(dg, [])
+        for ip in ips:
+            starred.add(ip)
+    return starred
 
 
 def main():
@@ -332,19 +333,17 @@ def main():
         for o in objs:
             all_refs.extend(pano_get_rules_for_object(pano, o["name"]))
 
-        # Device-groups referenced by rules
-        dgs = sorted({r["dg"] for r in all_refs})
-        target_fw_ips = map_dgs_to_firewalls(dgs)
+        # DG set for this IP (used only for starring)
+        rule_dg_set = dgs_for_rule_refs(all_refs)
+        starred_ips = starred_fw_ips_from_dgs(rule_dg_set)
 
-        # 3) Parallel firewall checks (only those FWs whose DGs appear in rules)
-        futures = []
-        results = []
-        if target_fw_ips:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-                for fw_ip in target_fw_ips:
-                    futures.append(ex.submit(fw_worker, fw_ip, FIREWALLS[fw_ip], ip))
-                for fut in as_completed(futures):
-                    results.append(fut.result())
+        # 3) Parallel firewall checks on ALL firewalls (requested default)
+        futures, results = [], []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            for fw_ip, fw_name in FIREWALLS.items():
+                futures.append(ex.submit(fw_worker, fw_ip, fw_name, ip))
+            for fut in as_completed(futures):
+                results.append(fut.result())
 
         # 4) Build report section for this IP
         report_lines.append(f"===== IP: {ip} =====")
@@ -369,16 +368,15 @@ def main():
         else:
             report_lines.append("Rules referencing the object name(s): <none>")
 
-        if target_fw_ips:
-            report_lines.append("Per-firewall routing & zone (DG-scoped):")
-            report_lines.append(f"{'Firewall':<18} {'Mgmt IP':<15} {'VR':<16} {'Interface':<18} {'Zone':<24} {'Error':<0}")
-            report_lines.append("-" * 96)
-            for r in sorted(results, key=lambda x: (x["fw"], x["ip"])):
-                report_lines.append(
-                    f"{r['fw']:<18} {r['ip']:<15} {r['vr']:<16} {r['iface']:<18} {r['zone']:<24} {r['err']}"
-                )
-        else:
-            report_lines.append("No device-groups matched; skipped firewall checks for this IP.")
+        report_lines.append("Per-firewall routing & zone (ALL FWs; ★ = DG has matching rules):")
+        report_lines.append(f"{'Firewall':<20} {'Mgmt IP':<15} {'VR':<16} {'Interface':<18} {'Zone':<24} {'Error':<0}")
+        report_lines.append("-" * 102)
+        for r in sorted(results, key=lambda x: (x["fw"], x["ip"])):
+            star = "★" if r["ip"] in starred_ips else " "
+            fw_disp = f"{star} {r['fw']}"
+            report_lines.append(
+                f"{fw_disp:<20} {r['ip']:<15} {r['vr']:<16} {r['iface']:<18} {r['zone']:<24} {r['err']}"
+            )
 
         report_lines.append("")  # blank line between IP sections
 
@@ -390,7 +388,8 @@ def main():
 
     # Also print to screen
     print("\n".join(report_lines))
-    print(f"\nSaved stitched report: {os.path.abspath(results_path)}\n")
+    print(f"\nSaved stitched report: {os.path.abspath(results_path)}")
+    print("Legend: ★ = firewall's DG has rules referencing the IP's address object(s)\n")
 
 
 if __name__ == "__main__":
