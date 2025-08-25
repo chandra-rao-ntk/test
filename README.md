@@ -11,7 +11,7 @@ from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticati
 USERNAME = "admin"
 PASSWORD = "REPLACE_ME"
 
-# You can list as many IPs as you want here
+# List as many IPs as you want to check
 IPS_TO_CHECK = [
     "10.232.64.10",
     # "10.1.2.3",
@@ -37,7 +37,7 @@ FIREWALLS = {
 }
 
 # Map device-group name -> list of firewall mgmt IPs to check
-# (Add/adjust DGs here. We matched based on your naming.)
+# (Add/adjust DGs here to match your Panorama device-groups.)
 DG_TO_FIREWALLS = {
     "FBAS21INFW": ["10.232.240.151"],
     "FBAS21NPFW": ["10.232.240.161"],
@@ -56,8 +56,8 @@ DG_TO_FIREWALLS = {
 # Seed VR names; we’ll also auto-discover all VRs on each firewall
 VR_CANDIDATES = ["default", "VR-1", "vr1", "trust-vr", "untrust-vr"]
 
-# Concurrency
-MAX_WORKERS = 8  # tweak if you have more/less firewalls
+# Concurrency for firewall checks
+MAX_WORKERS = 8
 
 # Logging
 LOG_DIR = "./logs"
@@ -77,6 +77,14 @@ def _session_log_path(host: str, kind: str) -> str:
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     safe = host.replace(":", "_")
     return os.path.join(LOG_DIR, f"{kind}_{safe}_{ts}.session.log")
+
+
+def _write_log(fname: str, text: str):
+    try:
+        with open(os.path.join(LOG_DIR, fname), "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        pass
 
 
 # ---------------- Netmiko connect ----------------
@@ -130,8 +138,7 @@ def pano_get_address_objects_for_ip(conn, ip):
             seen.add(key)
             objs.append({"name": name, "scope": scope})
     if not objs:
-        with open(os.path.join(LOG_DIR, f"pano_show_match_{ip}.txt"), "w", encoding="utf-8") as f:
-            f.write(out)
+        _write_log(f"pano_show_match_{ip}.txt", out)
     return objs
 
 
@@ -180,23 +187,26 @@ def discover_vrs(conn):
 
 
 def fib_lookup_any_vr(conn, ip):
-    """Try candidates then discovered VRs. Return (iface, vr_used)."""
+    """Try VR_CANDIDATES, then all discovered VRs. Return (iface, vr_used)."""
     tried = set()
+
     for vr in VR_CANDIDATES:
-        iface = _fib_try(conn, vr, ip)
+        iface = fib_try(conn, vr, ip)
         tried.add(vr)
         if iface:
             return iface, vr
+
     for vr in discover_vrs(conn):
         if vr in tried:
             continue
-        iface = _fib_try(conn, vr, ip)
+        iface = fib_try(conn, vr, ip)
         if iface:
             return iface, vr
+
     return None, None
 
 
-def _fib_try(conn, vr, ip):
+def fib_try(conn, vr, ip):
     out = conn.send_command(f"test routing fib-lookup virtual-router {vr} ip {ip}", read_timeout=45)
     first, selected = None, None
     for raw in out.splitlines():
@@ -213,14 +223,53 @@ def _fib_try(conn, vr, ip):
     return selected or first
 
 
-def get_zone_for_interface(conn, interface):
+def _parse_zone_line(line: str):
+    # Accept "Zone: ZONENAME", "Zone : ZONENAME", "zone: ZONENAME", etc.
+    s = line.strip()
+    idx = s.lower().find("zone")
+    if idx == -1:
+        return None
+    tail = s[idx + len("zone"):].lstrip(" :=\t")
+    zone = tail.split(",", 1)[0].strip()
+    return zone or None
+
+
+def get_zone_for_interface(conn, fw_host: str, interface: str):
     if not interface:
         return None
-    out = conn.send_command(f"show interface {interface}", read_timeout=30)
-    for line in out.splitlines():
-        if line.strip().startswith("Zone:"):
-            after = line.split("Zone:", 1)[1].strip()
-            return after.split(",", 1)[0].strip()
+
+    # 1) fast path: pipe to match (short output)
+    out1 = conn.send_command(f"show interface {interface} | match Zone", read_timeout=30)
+    for line in out1.splitlines():
+        z = _parse_zone_line(line)
+        if z:
+            return z
+
+    # 2) lowercase fallback
+    out2 = conn.send_command(f"show interface {interface} | match zone", read_timeout=30)
+    for line in out2.splitlines():
+        z = _parse_zone_line(line)
+        if z:
+            return z
+
+    # 3) fallback: set-format scrape for interface->zone
+    conn.config_mode()
+    conn.send_command("set cli config-output-format set", expect_string=r"#")
+    out3 = conn.send_command(f'show | match " zone " | match {interface}', expect_string=r"#", read_timeout=60)
+    conn.exit_config_mode()
+    for s in out3.splitlines():
+        s = s.strip()
+        # Example: set vsys vsys1 zone ENTERPRISE network layer3 ae1.1855
+        if s.startswith("set ") and " zone " in s and interface in s:
+            try:
+                zone = s.split(" zone ", 1)[1].split()[0]
+                if zone:
+                    return zone
+            except Exception:
+                continue
+
+    # if still nothing, dump raw outputs
+    _write_log(f"{fw_host}_zone_debug_{interface}.txt", f"OUT1:\n{out1}\n\nOUT2:\n{out2}\n\nOUT3:\n{out3}\n")
     return None
 
 
@@ -231,7 +280,7 @@ def fw_worker(fw_ip, fw_name, ip):
     try:
         fw = connect_panos(fw_ip, fw_name)
         iface, vr = fib_lookup_any_vr(fw, ip)
-        zone = get_zone_for_interface(fw, iface)
+        zone = get_zone_for_interface(fw, fw_ip, iface)
         fw.disconnect()
         return {
             "fw": fw_name, "ip": fw_ip, "vr": vr or "<unknown>",
@@ -249,7 +298,7 @@ def map_dgs_to_firewalls(dg_names):
             for ip in DG_TO_FIREWALLS[dg]:
                 targets.add(ip)
         else:
-            # Best-effort guess: use any firewall whose friendly name contains the DG token
+            # Best-effort guess: any FW whose friendly name contains the DG token
             for ip, fname in FIREWALLS.items():
                 if dg in fname:
                     targets.add(ip)
@@ -267,7 +316,7 @@ def main():
 
     report_lines = []
     for ip in IPS_TO_CHECK:
-        # 1) Panorama → objects
+        # 1) Panorama → address objects for this IP
         objs = pano_get_address_objects_for_ip(pano, ip)
 
         # 2) Panorama → rules for each object
@@ -277,18 +326,17 @@ def main():
 
         # Device-groups referenced by rules
         dgs = sorted({r["dg"] for r in all_refs})
-
-        # Which firewalls to check (DG scoped)
         target_fw_ips = map_dgs_to_firewalls(dgs)
 
-        # 3) Parallel firewall checks for THIS IP
+        # 3) Parallel firewall checks (only those FWs whose DGs appear in rules)
         futures = []
         results = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            for fw_ip in target_fw_ips:
-                futures.append(ex.submit(fw_worker, fw_ip, FIREWALLS[fw_ip], ip))
-            for fut in as_completed(futures):
-                results.append(fut.result())
+        if target_fw_ips:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+                for fw_ip in target_fw_ips:
+                    futures.append(ex.submit(fw_worker, fw_ip, FIREWALLS[fw_ip], ip))
+                for fut in as_completed(futures):
+                    results.append(fut.result())
 
         # 4) Build report section for this IP
         report_lines.append(f"===== IP: {ip} =====")
