@@ -7,8 +7,8 @@ import logging
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
 # ===== USER SETTINGS (same creds for Panorama & FWs) =====
-USERNAME = "admin"
-PASSWORD = "your-password-here"
+USERNAME = "crao"
+PASSWORD = "QWErty430$QWErty430$"
 
 IP_TO_CHECK = "10.232.64.10"
 
@@ -65,6 +65,7 @@ def connect_panos(host, title=""):
     }
     try:
         conn = ConnectHandler(**info)
+        conn.send_command("set cli config-output-format set")
         conn.send_command("set cli pager off", expect_string=r">|#")
         conn.send_command("set cli terminal width 500", expect_string=r">|#")
         return conn
