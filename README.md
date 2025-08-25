@@ -10,12 +10,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
 # ========= USER SETTINGS =========
-USERNAME = "admin"
-PASSWORD = "REPLACE_ME"
+USERNAME = ""
+PASSWORD = ""
 
 IPS_TO_CHECK = [
     "10.232.64.10",
-    # add more IPs...
+    "10.212.64.10",
+    "10.232.68.162",
+    "10.212.68.162",
 ]
 
 PANORAMA_HOST = "10.232.240.150"
@@ -27,12 +29,12 @@ FIREWALLS = {
     "10.232.240.159": "FBAS21PRFW001",
     "10.232.240.153": "FBAS21SSFW001",
     "10.232.240.157": "FBAS21VPFW001",
-    "10.212.240.151": "FBCH03INFW001",
+    "10.212.240.152": "FBCH03INFW002",
     "10.212.240.161": "FBCH03NPFW001",
     "10.212.240.155": "FBCH03PAFW001",
     "10.212.240.159": "FBCH03PRFW001",
     "10.212.240.153": "FBCH03SSFW001",
-    "10.212.240.157": "FBCH03VPFW001",
+    #"10.212.240.157": "FBCH03VPFW001",
 }
 
 # Panorama template overrides (mgmt_ip -> template name) if your naming isn’t standard
@@ -43,7 +45,7 @@ TEMPLATE_OVERRIDE = {
 # Force certain FWs to always try these VRs (unioned with Panorama discovery; forced first)
 FORCE_FW_VRS = {
     "10.232.240.157": ["INT_VR", "EXT_VR"],  # FBAS21VPFW001
-    "10.212.240.157": ["INT_VR", "EXT_VR"],  # FBCH03VPFW001
+    #"10.212.240.157": ["INT_VR", "EXT_VR"],  # FBCH03VPFW001
 }
 
 # Device-group -> firewall mgmt IPs (for ★ marking in the table)
@@ -59,7 +61,7 @@ DG_TO_FIREWALLS = {
     "FBCH03PAFW": ["10.212.240.155"],
     "FBCH03PRFW": ["10.212.240.159"],
     "FBCH03SSFW": ["10.212.240.153"],
-    "FBCH03VPFW": ["10.212.240.157"],
+    #"FBCH03VPFW": ["10.212.240.157"],
 }
 
 MAX_WORKERS = 10
@@ -104,7 +106,7 @@ def connect_panos(host, title=""):
         conn = ConnectHandler(**info)
         conn.send_command("set cli config-output-format set", expect_string=r">|#")
         conn.send_command("set cli pager off", expect_string=r">|#")
-        conn.send_command("set cli terminal width 999", expect_string=r">|#")
+        conn.send_command("set cli terminal width 500", expect_string=r">|#")
         return conn
     except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
         raise RuntimeError(f"Failed to connect to {title or host}: {e}")
@@ -168,7 +170,7 @@ def pano_template_vrs(conn):
     """
     conn.config_mode()
     out = conn.send_command(
-        'show | match "set template " | match " vsys vsys1 import network virtual-router "',
+        'show | match " vsys vsys1 import network virtual-router "',
         expect_string=r"#", read_timeout=90,
     )
     conn.exit_config_mode()
