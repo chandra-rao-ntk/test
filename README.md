@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
 Given an IP:
-  1) Panorama (SSH, config mode): 
-       - show | match <IP>           -> get address object name(s)
-       - show | match <OBJECT_NAME>  -> find all security rules referencing it (DG + pre/post/local)
-  2) Firewalls (SSH): 
+  1) Panorama (SSH, config mode, set-format):
+       - show | match <IP>                  -> address object name(s) (can be multiple)
+       - show | match <OBJECT_NAME>         -> all security rules referencing it (DG + pre/post/local)
+  2) Firewalls (SSH):
        - test routing fib-lookup virtual-router <vr> ip <IP> -> egress interface
        - show interface <if> -> Zone
-Outputs a clear summary. Read-only; no commits. Session-only CLI tweaks.
+Read-only; no commits. Session-only CLI tweaks.
 Requires: pip install netmiko
 """
 
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
-# ========= USER SETTINGS (inline creds, same for Panorama & FWs) =========
+# ========= USER SETTINGS (same creds for Panorama & FWs) =========
 USERNAME = "admin"
 PASSWORD = "your-password-here"
 
 IP_TO_CHECK = "10.232.64.10"
 
-PANORAMA_HOST = "10.212.240.150"  # FBAS21PANM001
+PANORAMA_HOST = "10.232.240.150"  # << updated as requested
 
 # Firewalls: mgmt_ip : friendly_name
 FIREWALLS = {
@@ -39,7 +39,7 @@ FIREWALLS = {
 
 # Try these VR names first (script will auto-discover others if needed)
 VR_CANDIDATES = ["default", "VR-1", "vr1", "trust-vr", "untrust-vr"]
-# ========================================================================
+# ================================================================
 
 
 def connect_panos(host, title=""):
@@ -66,80 +66,72 @@ def pano_get_address_objects_for_ip(conn, ip):
     """
     Panorama config mode, 'set' format, then 'show | match <ip>'.
     Accepts:
-      set shared address <NAME> ip-netmask <IP>
-      set device-group <DG> address <NAME> ip-netmask <IP>
-    Returns: [{'name':NAME, 'scope':'shared' or 'device-group <DG>'}]
+        set shared address <NAME> ip-netmask <IP>
+        set device-group <DG> address <NAME> ip-netmask <IP>
+    Returns list of {'name': NAME, 'scope': 'shared' or 'device-group <DG>'}
     """
-    conn.config_mode()                                  # prompt ends with '#'
+    conn.config_mode()
+    conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
-    out = conn.send_command(f"show | match {ip}", expect_string=r"#", read_timeout=60)
+    out = conn.send_command(f"show | match {ip}", expect_string=r"#", read_timeout=90)
     conn.exit_config_mode()
 
     objs, seen = [], set()
-    for raw in out.splitlines():
-        s = raw.strip()
-        if f" ip-netmask {ip}" not in f" {s} ":
+    for s in out.splitlines():
+        s = s.strip()
+        if not (s.startswith("set ") and " address " in s and " ip-netmask " in s and ip in s):
             continue
         parts = s.split()
-        if len(parts) < 6 or parts[0] != "set":
-            continue
-        # set shared address <NAME> ip-netmask <IP>
         if parts[1] == "shared" and parts[2] == "address":
-            name = parts[3]
-            if name not in seen:
-                seen.add(name)
-                objs.append({"name": name, "scope": "shared"})
-        # set device-group <DG> address <NAME> ip-netmask <IP>
+            name, scope = parts[3], "shared"
         elif parts[1] == "device-group":
             dg = parts[2]
-            if "address" in parts:
-                idx = parts.index("address")
-                if idx + 1 < len(parts):
-                    name = parts[idx + 1]
-                    key = f"{dg}:{name}"
-                    if key not in seen:
-                        seen.add(key)
-                        objs.append({"name": name, "scope": f"device-group {dg}"})
+            name = parts[parts.index("address") + 1]
+            scope = f"device-group {dg}"
+        else:
+            continue
+        key = (name, scope)
+        if key not in seen:
+            seen.add(key)
+            objs.append({"name": name, "scope": scope})
     return objs
 
 
 def pano_get_rules_for_object(conn, obj_name):
     """
     Panorama config mode, 'set' format, 'show | match <obj_name>'.
-    We only keep lines that are security rules.
-    Returns: [{'dg':..., 'where': pre-rulebase|post-rulebase|rulebase, 'rule':..., 'field':'source'|'destination'}]
+    Keep only security rule lines, de-dup.
+    Returns [{'obj':obj_name,'dg':..., 'where': pre-rulebase|post-rulebase|rulebase, 'rule':..., 'field':'source'|'destination'}]
     """
     conn.config_mode()
+    conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
-    out = conn.send_command(f"show | match {obj_name}", expect_string=r"#", read_timeout=60)
+    out = conn.send_command(f"show | match {obj_name}", expect_string=r"#", read_timeout=90)
     conn.exit_config_mode()
 
     refs, seen = [], set()
-    for raw in out.splitlines():
-        s = raw.strip()
-        if not s.startswith("set device-group ") or " security rules " not in s:
-            continue
-        if f" {obj_name} " not in f" {s} ":
+    for s in out.splitlines():
+        s = s.strip()
+        if not s.startswith("set device-group ") or " security rules " not in s or f" {obj_name} " not in f" {s} ":
             continue
         parts = s.split()
         try:
-            dg = parts[2]
-            where = parts[3]                                 # pre-rulebase | post-rulebase | rulebase
-            rule = parts[parts.index("rules") + 1]
-            field = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
-            key = (dg, where, rule, field)
+            dg     = parts[2]
+            where  = parts[3]  # pre-rulebase | post-rulebase | rulebase
+            rule   = parts[parts.index("rules")+1]
+            field  = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
+            key    = (obj_name, dg, where, rule, field)
             if key not in seen:
                 seen.add(key)
-                refs.append({"dg": dg, "where": where, "rule": rule, "field": field})
+                refs.append({"obj": obj_name, "dg": dg, "where": where, "rule": rule, "field": field})
         except Exception:
-            pass
+            continue
     return refs
 
 
 # -------------------- FIREWALL LOOKUPS --------------------
 
 def discover_vrs(conn):
-    """Scrape VR names from running config (read-only)."""
     conn.config_mode()
     conn.send_command("set cli config-output-format set", expect_string=r"#")
     out = conn.send_command('show | match "set network virtual-router "', expect_string=r"#", read_timeout=60)
@@ -215,7 +207,7 @@ def main():
     else:
         print("[!] No address objects found for this IP on Panorama.")
 
-    # For each object, find rules that reference it
+    # For each object, find rules that reference it (handles MULTIPLE objects)
     all_refs = []
     for o in addr_objs:
         refs = pano_get_rules_for_object(pano, o["name"])
@@ -252,16 +244,16 @@ def main():
         print("\nAddress object(s): <none>")
 
     if all_refs:
-        print("\nRules referencing the object(s):")
+        print("\nRules referencing the object name(s):")
         seen = set()
         for r in all_refs:
-            key = (r['dg'], r['where'], r['rule'], r['field'])
+            key = (r['obj'], r['dg'], r['where'], r['rule'], r['field'])
             if key in seen:
                 continue
             seen.add(key)
-            print(f"  - DG={r['dg']:<14} {r['where']:<12} rule={r['rule']:<40} field={r['field']}")
+            print(f"  - OBJ={r['obj']:<22} DG={r['dg']:<14} {r['where']:<12} rule={r['rule']:<40} field={r['field']}")
     else:
-        print("\nRules referencing the object(s): <none>")
+        print("\nRules referencing the object name(s): <none>")
 
     print("\nPer-firewall routing & zone:")
     print(f"{'Firewall':<18} {'Mgmt IP':<15} {'VR':<16} {'Interface':<18} {'Zone':<24}")
