@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-# Read-only workflow with Netmiko session logging + optional DEBUG logging
+# Read-only, parallel, DG-scoped PAN workflow with logs & stitched report
 
 import os
-import datetime as dt
 import logging
+import datetime as dt
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
-# ===== USER SETTINGS (same creds for Panorama & FWs) =====
-USERNAME = ""
-PASSWORD = ""
+# ========= USER SETTINGS =========
+USERNAME = "admin"
+PASSWORD = "REPLACE_ME"
 
-IP_TO_CHECK = "10.232.64.10"
+# You can list as many IPs as you want here
+IPS_TO_CHECK = [
+    "10.232.64.10",
+    # "10.1.2.3",
+    # "10.4.5.6",
+]
 
-PANORAMA_HOST = "10.232.240.150"  # as requested
+PANORAMA_HOST = "10.232.240.150"   # Panorama
 
+# All firewalls you might target (mgmt_ip -> friendly_name)
 FIREWALLS = {
     "10.232.240.151": "FBAS21INFW001",
     "10.232.240.161": "FBAS21NPFW001",
@@ -29,13 +36,32 @@ FIREWALLS = {
     "10.212.240.157": "FBCH03VPFW001",
 }
 
+# Map device-group name -> list of firewall mgmt IPs to check
+# (Add/adjust DGs here. We matched based on your naming.)
+DG_TO_FIREWALLS = {
+    "FBAS21INFW": ["10.232.240.151"],
+    "FBAS21NPFW": ["10.232.240.161"],
+    "FBAS21PAFW": ["10.232.240.155"],
+    "FBAS21PRFW": ["10.232.240.159"],
+    "FBAS21SSFW": ["10.232.240.153"],
+    "FBAS21VPFW": ["10.232.240.157"],
+    "FBCH03INFW": ["10.212.240.151"],
+    "FBCH03NPFW": ["10.212.240.161"],
+    "FBCH03PAFW": ["10.212.240.155"],
+    "FBCH03PRFW": ["10.212.240.159"],
+    "FBCH03SSFW": ["10.212.240.153"],
+    "FBCH03VPFW": ["10.212.240.157"],
+}
+
+# Seed VR names; we’ll also auto-discover all VRs on each firewall
 VR_CANDIDATES = ["default", "VR-1", "vr1", "trust-vr", "untrust-vr"]
 
-# ---- logging knobs ----
-LOG_DIR = "./logs"
-ENABLE_NETMIKO_DEBUG = True  # set False to disable the extra debug log
-# -----------------------
+# Concurrency
+MAX_WORKERS = 8  # tweak if you have more/less firewalls
 
+# Logging
+LOG_DIR = "./logs"
+ENABLE_NETMIKO_DEBUG = True
 os.makedirs(LOG_DIR, exist_ok=True)
 
 if ENABLE_NETMIKO_DEBUG:
@@ -46,11 +72,14 @@ if ENABLE_NETMIKO_DEBUG:
     )
     logging.getLogger("netmiko").setLevel(logging.DEBUG)
 
+
 def _session_log_path(host: str, kind: str) -> str:
-    # kind = "panorama" or "fw"
-    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     safe = host.replace(":", "_")
-    return os.path.join(LOG_DIR, f"{kind}_{safe}.session.log")
+    return os.path.join(LOG_DIR, f"{kind}_{safe}_{ts}.session.log")
+
+
+# ---------------- Netmiko connect ----------------
 
 def connect_panos(host, title=""):
     info = {
@@ -60,22 +89,22 @@ def connect_panos(host, title=""):
         "password": PASSWORD,
         "fast_cli": False,
         "global_delay_factor": 1.0,
-        # per-session transcript:
         "session_log": _session_log_path(host, "panorama" if host == PANORAMA_HOST else "fw"),
     }
     try:
         conn = ConnectHandler(**info)
-        conn.send_command("set cli config-output-format set")
+        conn.send_command("set cli config-output-format set", expect_string=r">|#")
         conn.send_command("set cli pager off", expect_string=r">|#")
         conn.send_command("set cli terminal width 500", expect_string=r">|#")
         return conn
     except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
         raise RuntimeError(f"Failed to connect to {title or host}: {e}")
 
-# -------------------- PANORAMA LOOKUPS --------------------
+
+# ------------- Panorama helpers (SSH, set-format) -------------
 
 def pano_get_address_objects_for_ip(conn, ip):
-    """Panorama config mode, 'set' format, 'show | match <ip>'."""
+    """Return [{'name': NAME, 'scope': 'shared'|'device-group <DG>'}, ...]"""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
@@ -100,15 +129,14 @@ def pano_get_address_objects_for_ip(conn, ip):
         if key not in seen:
             seen.add(key)
             objs.append({"name": name, "scope": scope})
-
-    # If nothing found, dump raw output to a file for inspection
     if not objs:
         with open(os.path.join(LOG_DIR, f"pano_show_match_{ip}.txt"), "w", encoding="utf-8") as f:
             f.write(out)
     return objs
 
+
 def pano_get_rules_for_object(conn, obj_name):
-    """Panorama config mode, 'set' format, 'show | match <obj_name>'."""
+    """Return [{'obj':name,'dg':DG,'where':pre|post|rulebase,'rule':RULE,'field':source|destination}, ...]"""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
@@ -122,11 +150,11 @@ def pano_get_rules_for_object(conn, obj_name):
             continue
         parts = s.split()
         try:
-            dg = parts[2]
-            where = parts[3]  # pre-rulebase | post-rulebase | rulebase
-            rule = parts[parts.index("rules") + 1]
-            field = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
-            key = (obj_name, dg, where, rule, field)
+            dg     = parts[2]
+            where  = parts[3]
+            rule   = parts[parts.index("rules") + 1]
+            field  = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
+            key    = (obj_name, dg, where, rule, field)
             if key not in seen:
                 seen.add(key)
                 refs.append({"obj": obj_name, "dg": dg, "where": where, "rule": rule, "field": field})
@@ -134,9 +162,11 @@ def pano_get_rules_for_object(conn, obj_name):
             continue
     return refs
 
-# -------------------- FIREWALL LOOKUPS --------------------
+
+# ------------- Firewall helpers (SSH) -------------
 
 def discover_vrs(conn):
+    """Find all VR names on a firewall."""
     conn.config_mode()
     conn.send_command("set cli config-output-format set", expect_string=r"#")
     out = conn.send_command('show | match "set network virtual-router "', expect_string=r"#", read_timeout=60)
@@ -148,7 +178,9 @@ def discover_vrs(conn):
             vrs.append(parts[3])
     return sorted(set(vrs))
 
-def fib_lookup(conn, ip):
+
+def fib_lookup_any_vr(conn, ip):
+    """Try candidates then discovered VRs. Return (iface, vr_used)."""
     tried = set()
     for vr in VR_CANDIDATES:
         iface = _fib_try(conn, vr, ip)
@@ -162,6 +194,7 @@ def fib_lookup(conn, ip):
         if iface:
             return iface, vr
     return None, None
+
 
 def _fib_try(conn, vr, ip):
     out = conn.send_command(f"test routing fib-lookup virtual-router {vr} ip {ip}", read_timeout=45)
@@ -179,6 +212,7 @@ def _fib_try(conn, vr, ip):
                 selected = iface
     return selected or first
 
+
 def get_zone_for_interface(conn, interface):
     if not interface:
         return None
@@ -189,79 +223,119 @@ def get_zone_for_interface(conn, interface):
             return after.split(",", 1)[0].strip()
     return None
 
-# -------------------- MAIN --------------------
+
+# ------------- Workers & Orchestration -------------
+
+def fw_worker(fw_ip, fw_name, ip):
+    """Connect to one firewall and resolve zone for one IP."""
+    try:
+        fw = connect_panos(fw_ip, fw_name)
+        iface, vr = fib_lookup_any_vr(fw, ip)
+        zone = get_zone_for_interface(fw, iface)
+        fw.disconnect()
+        return {
+            "fw": fw_name, "ip": fw_ip, "vr": vr or "<unknown>",
+            "iface": iface or "<not-found>", "zone": zone or "<not-found>", "err": ""
+        }
+    except Exception as e:
+        return {"fw": fw_name, "ip": fw_ip, "vr": "<error>", "iface": "<error>", "zone": "<error>", "err": str(e)}
+
+
+def map_dgs_to_firewalls(dg_names):
+    """Resolve which firewall IPs to check from a set of DG names."""
+    targets = set()
+    for dg in dg_names:
+        if dg in DG_TO_FIREWALLS:
+            for ip in DG_TO_FIREWALLS[dg]:
+                targets.add(ip)
+        else:
+            # Best-effort guess: use any firewall whose friendly name contains the DG token
+            for ip, fname in FIREWALLS.items():
+                if dg in fname:
+                    targets.add(ip)
+    return sorted(targets)
+
 
 def main():
-    print(f"\n=== PAN Lookup for IP: {IP_TO_CHECK} ===\n")
+    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_path = os.path.join(LOG_DIR, f"results_{ts}.txt")
 
-    # Panorama
-    print(f"[*] Connecting to Panorama {PANORAMA_HOST} ...")
+    print(f"\n=== PAN Multi-IP Lookup ===\nPanorama: {PANORAMA_HOST}\nIPs: {', '.join(IPS_TO_CHECK)}\nLogs dir: {os.path.abspath(LOG_DIR)}\n")
+
+    # Connect to Panorama once
     pano = connect_panos(PANORAMA_HOST, "Panorama")
 
-    print("[*] Searching address objects on Panorama (show | match <IP>) ...")
-    addr_objs = pano_get_address_objects_for_ip(pano, IP_TO_CHECK)
-    if addr_objs:
-        print("[+] Address object(s) for IP:")
-        for o in addr_objs:
-            print(f"    - {o['name']}  ({o['scope']})")
-    else:
-        print("[!] No address objects found for this IP on Panorama.")
-        print(f"    Raw output saved to {os.path.join(LOG_DIR, f'pano_show_match_{IP_TO_CHECK}.txt')}")
+    report_lines = []
+    for ip in IPS_TO_CHECK:
+        # 1) Panorama → objects
+        objs = pano_get_address_objects_for_ip(pano, ip)
 
-    # For each object, find rules that reference it (handles MULTIPLE objects)
-    all_refs = []
-    for o in addr_objs:
-        refs = pano_get_rules_for_object(pano, o["name"])
-        if refs:
-            print(f"\n[+] Rules referencing '{o['name']}':")
-            for r in refs:
-                print(f"    - DG={r['dg']}  {r['where']}  rule={r['rule']}  field={r['field']}")
-            all_refs.extend(refs)
+        # 2) Panorama → rules for each object
+        all_refs = []
+        for o in objs:
+            all_refs.extend(pano_get_rules_for_object(pano, o["name"]))
+
+        # Device-groups referenced by rules
+        dgs = sorted({r["dg"] for r in all_refs})
+
+        # Which firewalls to check (DG scoped)
+        target_fw_ips = map_dgs_to_firewalls(dgs)
+
+        # 3) Parallel firewall checks for THIS IP
+        futures = []
+        results = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            for fw_ip in target_fw_ips:
+                futures.append(ex.submit(fw_worker, fw_ip, FIREWALLS[fw_ip], ip))
+            for fut in as_completed(futures):
+                results.append(fut.result())
+
+        # 4) Build report section for this IP
+        report_lines.append(f"===== IP: {ip} =====")
+        if objs:
+            report_lines.append("Address object(s):")
+            for o in objs:
+                report_lines.append(f"  - {o['name']} ({o['scope']})")
         else:
-            print(f"\n[!] No rules reference '{o['name']}'.")
+            report_lines.append("Address object(s): <none found>")
+
+        if all_refs:
+            report_lines.append("Rules referencing the object name(s):")
+            seen = set()
+            for r in all_refs:
+                key = (r['obj'], r['dg'], r['where'], r['rule'], r['field'])
+                if key in seen:
+                    continue
+                seen.add(key)
+                report_lines.append(
+                    f"  - OBJ={r['obj']:<24} DG={r['dg']:<14} {r['where']:<12} rule={r['rule']:<40} field={r['field']}"
+                )
+        else:
+            report_lines.append("Rules referencing the object name(s): <none>")
+
+        if target_fw_ips:
+            report_lines.append("Per-firewall routing & zone (DG-scoped):")
+            report_lines.append(f"{'Firewall':<18} {'Mgmt IP':<15} {'VR':<16} {'Interface':<18} {'Zone':<24} {'Error':<0}")
+            report_lines.append("-" * 96)
+            for r in sorted(results, key=lambda x: (x["fw"], x["ip"])):
+                report_lines.append(
+                    f"{r['fw']:<18} {r['ip']:<15} {r['vr']:<16} {r['iface']:<18} {r['zone']:<24} {r['err']}"
+                )
+        else:
+            report_lines.append("No device-groups matched; skipped firewall checks for this IP.")
+
+        report_lines.append("")  # blank line between IP sections
+
     pano.disconnect()
 
-    # Firewalls
-    print("\n[*] Checking routing/zone on each firewall ...")
-    rows = []
-    for host, name in FIREWALLS.items():
-        try:
-            fw = connect_panos(host, name)
-            iface, vr = fib_lookup(fw, IP_TO_CHECK)
-            zone = get_zone_for_interface(fw, iface)
-            fw.disconnect()
-            rows.append({"fw": name, "ip": host, "vr": vr or "<unknown>",
-                         "iface": iface or "<not-found>", "zone": zone or "<not-found>"})
-        except Exception as e:
-            rows.append({"fw": name, "ip": host, "vr": "<error>", "iface": "<error>", "zone": f"<conn failed: {e}>"})
+    # Write stitched report
+    with open(results_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
 
-    # Report
-    print("\n=== SUMMARY ===")
-    if addr_objs:
-        print("\nAddress object(s):")
-        for o in addr_objs:
-            print(f"  - {o['name']}  ({o['scope']})")
-    else:
-        print("\nAddress object(s): <none>")
+    # Also print to screen
+    print("\n".join(report_lines))
+    print(f"\nSaved stitched report: {os.path.abspath(results_path)}\n")
 
-    if all_refs:
-        print("\nRules referencing the object name(s):")
-        seen = set()
-        for r in all_refs:
-            key = (r['obj'], r['dg'], r['where'], r['rule'], r['field'])
-            if key in seen:
-                continue
-            seen.add(key)
-            print(f"  - OBJ={r['obj']:<22} DG={r['dg']:<14} {r['where']:<12} rule={r['rule']:<40} field={r['field']}")
-    else:
-        print("\nRules referencing the object name(s): <none>")
-
-    print("\nPer-firewall routing & zone:")
-    print(f"{'Firewall':<18} {'Mgmt IP':<15} {'VR':<16} {'Interface':<18} {'Zone':<24}")
-    print("-" * 96)
-    for r in rows:
-        print(f"{r['fw']:<18} {r['ip']:<15} {r['vr']:<16} {r['iface']:<18} {r['zone']:<24}")
-    print("\nDone.\n")
 
 if __name__ == "__main__":
     main()
