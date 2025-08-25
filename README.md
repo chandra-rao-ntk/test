@@ -37,7 +37,7 @@ FIREWALLS = {
 }
 
 # Map device-group name -> list of firewall mgmt IPs to check
-# (Add/adjust DGs here to match your Panorama device-groups.)
+# (Edit to match your Panorama DG names.)
 DG_TO_FIREWALLS = {
     "FBAS21INFW": ["10.232.240.151"],
     "FBAS21NPFW": ["10.232.240.161"],
@@ -101,6 +101,7 @@ def connect_panos(host, title=""):
     }
     try:
         conn = ConnectHandler(**info)
+        # Set once at session start (do NOT repeat inside config-mode to avoid “Invalid syntax” on some images)
         conn.send_command("set cli config-output-format set", expect_string=r">|#")
         conn.send_command("set cli pager off", expect_string=r">|#")
         conn.send_command("set cli terminal width 500", expect_string=r">|#")
@@ -115,7 +116,7 @@ def pano_get_address_objects_for_ip(conn, ip):
     """Return [{'name': NAME, 'scope': 'shared'|'device-group <DG>'}, ...]"""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
-    conn.send_command("set cli config-output-format set", expect_string=r"#")
+    # Don't send 'set cli config-output-format set' here (some versions reject it in config mode)
     out = conn.send_command(f"show | match {ip}", expect_string=r"#", read_timeout=90)
     conn.exit_config_mode()
 
@@ -146,7 +147,6 @@ def pano_get_rules_for_object(conn, obj_name):
     """Return [{'obj':name,'dg':DG,'where':pre|post|rulebase,'rule':RULE,'field':source|destination}, ...]"""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
-    conn.send_command("set cli config-output-format set", expect_string=r"#")
     out = conn.send_command(f"show | match {obj_name}", expect_string=r"#", read_timeout=90)
     conn.exit_config_mode()
 
@@ -173,9 +173,8 @@ def pano_get_rules_for_object(conn, obj_name):
 # ------------- Firewall helpers (SSH) -------------
 
 def discover_vrs(conn):
-    """Find all VR names on a firewall."""
+    """Find all VR names on a firewall (relies on session having set-format enabled)."""
     conn.config_mode()
-    conn.send_command("set cli config-output-format set", expect_string=r"#")
     out = conn.send_command('show | match "set network virtual-router "', expect_string=r"#", read_timeout=60)
     conn.exit_config_mode()
     vrs = []
@@ -184,6 +183,29 @@ def discover_vrs(conn):
         if len(parts) >= 4 and parts[:3] == ["set", "network", "virtual-router"]:
             vrs.append(parts[3])
     return sorted(set(vrs))
+
+
+def _clean_iface(token: str) -> str:
+    # remove punctuation that sometimes trails the interface in fib output
+    return token.strip().strip(",;:")
+
+
+def fib_try(conn, vr, ip):
+    out = conn.send_command(f"test routing fib-lookup virtual-router {vr} ip {ip}", read_timeout=45)
+    first, selected = None, None
+    for raw in out.splitlines():
+        line = raw.strip()
+        if "interface " in line:
+            try:
+                iface = line.split("interface", 1)[1].split()[0]
+                iface = _clean_iface(iface)  # sanitize trailing punctuation
+            except Exception:
+                continue
+            if first is None:
+                first = iface
+            if "[selected]" in line:
+                selected = iface
+    return selected or first
 
 
 def fib_lookup_any_vr(conn, ip):
@@ -206,23 +228,6 @@ def fib_lookup_any_vr(conn, ip):
     return None, None
 
 
-def fib_try(conn, vr, ip):
-    out = conn.send_command(f"test routing fib-lookup virtual-router {vr} ip {ip}", read_timeout=45)
-    first, selected = None, None
-    for raw in out.splitlines():
-        line = raw.strip()
-        if "interface " in line:
-            try:
-                iface = line.split("interface", 1)[1].split()[0]
-            except Exception:
-                continue
-            if first is None:
-                first = iface
-            if "[selected]" in line:
-                selected = iface
-    return selected or first
-
-
 def _parse_zone_line(line: str):
     # Accept "Zone: ZONENAME", "Zone : ZONENAME", "zone: ZONENAME", etc.
     s = line.strip()
@@ -238,38 +243,41 @@ def get_zone_for_interface(conn, fw_host: str, interface: str):
     if not interface:
         return None
 
-    # 1) fast path: pipe to match (short output)
-    out1 = conn.send_command(f"show interface {interface} | match Zone", read_timeout=30)
+    # 1) shortest output first
+    cmd1 = f"show interface {interface} | match Zone"
+    out1 = conn.send_command(cmd1, read_timeout=30)
     for line in out1.splitlines():
         z = _parse_zone_line(line)
         if z:
             return z
 
-    # 2) lowercase fallback
-    out2 = conn.send_command(f"show interface {interface} | match zone", read_timeout=30)
+    # 2) lowercase fallback (some images print 'zone:')
+    cmd2 = f"show interface {interface} | match zone"
+    out2 = conn.send_command(cmd2, read_timeout=30)
     for line in out2.splitlines():
         z = _parse_zone_line(line)
         if z:
             return z
 
-    # 3) fallback: set-format scrape for interface->zone
+    # 3) final fallback: scrape config for interface→zone mapping
     conn.config_mode()
-    conn.send_command("set cli config-output-format set", expect_string=r"#")
-    out3 = conn.send_command(f'show | match " zone " | match {interface}', expect_string=r"#", read_timeout=60)
+    cmd3 = f"show | match zone | match {interface}"
+    out3 = conn.send_command(cmd3, expect_string=r"#", read_timeout=60)
     conn.exit_config_mode()
+    # Example: set vsys vsys1 zone ENTERPRISE network layer3 ae1.1855
     for s in out3.splitlines():
         s = s.strip()
-        # Example: set vsys vsys1 zone ENTERPRISE network layer3 ae1.1855
         if s.startswith("set ") and " zone " in s and interface in s:
             try:
                 zone = s.split(" zone ", 1)[1].split()[0]
                 if zone:
                     return zone
             except Exception:
-                continue
+                pass
 
-    # if still nothing, dump raw outputs
-    _write_log(f"{fw_host}_zone_debug_{interface}.txt", f"OUT1:\n{out1}\n\nOUT2:\n{out2}\n\nOUT3:\n{out3}\n")
+    # Dump the exact commands + outputs for troubleshooting
+    debug_text = f"$ {cmd1}\n{out1}\n\n$ {cmd2}\n{out2}\n\n$ {cmd3}\n{out3}\n"
+    _write_log(f"{fw_host}_zone_debug_{interface}.txt", debug_text)
     return None
 
 
