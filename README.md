@@ -1,27 +1,19 @@
 #!/usr/bin/env python3
-"""
-Given an IP:
-  1) Panorama (SSH, config mode, set-format):
-       - show | match <IP>                  -> address object name(s) (can be multiple)
-       - show | match <OBJECT_NAME>         -> all security rules referencing it (DG + pre/post/local)
-  2) Firewalls (SSH):
-       - test routing fib-lookup virtual-router <vr> ip <IP> -> egress interface
-       - show interface <if> -> Zone
-Read-only; no commits. Session-only CLI tweaks.
-Requires: pip install netmiko
-"""
+# Read-only workflow with Netmiko session logging + optional DEBUG logging
 
+import os
+import datetime as dt
+import logging
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
-# ========= USER SETTINGS (same creds for Panorama & FWs) =========
+# ===== USER SETTINGS (same creds for Panorama & FWs) =====
 USERNAME = "admin"
 PASSWORD = "your-password-here"
 
 IP_TO_CHECK = "10.232.64.10"
 
-PANORAMA_HOST = "10.232.240.150"  # << updated as requested
+PANORAMA_HOST = "10.232.240.150"  # as requested
 
-# Firewalls: mgmt_ip : friendly_name
 FIREWALLS = {
     "10.232.240.151": "FBAS21INFW001",
     "10.232.240.161": "FBAS21NPFW001",
@@ -37,10 +29,28 @@ FIREWALLS = {
     "10.212.240.157": "FBCH03VPFW001",
 }
 
-# Try these VR names first (script will auto-discover others if needed)
 VR_CANDIDATES = ["default", "VR-1", "vr1", "trust-vr", "untrust-vr"]
-# ================================================================
 
+# ---- logging knobs ----
+LOG_DIR = "./logs"
+ENABLE_NETMIKO_DEBUG = True  # set False to disable the extra debug log
+# -----------------------
+
+os.makedirs(LOG_DIR, exist_ok=True)
+
+if ENABLE_NETMIKO_DEBUG:
+    logging.basicConfig(
+        filename=os.path.join(LOG_DIR, "netmiko_debug.log"),
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("netmiko").setLevel(logging.DEBUG)
+
+def _session_log_path(host: str, kind: str) -> str:
+    # kind = "panorama" or "fw"
+    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = host.replace(":", "_")
+    return os.path.join(LOG_DIR, f"{kind}_{safe}.session.log")
 
 def connect_panos(host, title=""):
     info = {
@@ -50,6 +60,8 @@ def connect_panos(host, title=""):
         "password": PASSWORD,
         "fast_cli": False,
         "global_delay_factor": 1.0,
+        # per-session transcript:
+        "session_log": _session_log_path(host, "panorama" if host == PANORAMA_HOST else "fw"),
     }
     try:
         conn = ConnectHandler(**info)
@@ -59,17 +71,10 @@ def connect_panos(host, title=""):
     except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
         raise RuntimeError(f"Failed to connect to {title or host}: {e}")
 
-
 # -------------------- PANORAMA LOOKUPS --------------------
 
 def pano_get_address_objects_for_ip(conn, ip):
-    """
-    Panorama config mode, 'set' format, then 'show | match <ip>'.
-    Accepts:
-        set shared address <NAME> ip-netmask <IP>
-        set device-group <DG> address <NAME> ip-netmask <IP>
-    Returns list of {'name': NAME, 'scope': 'shared' or 'device-group <DG>'}
-    """
+    """Panorama config mode, 'set' format, 'show | match <ip>'."""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
@@ -94,15 +99,15 @@ def pano_get_address_objects_for_ip(conn, ip):
         if key not in seen:
             seen.add(key)
             objs.append({"name": name, "scope": scope})
+
+    # If nothing found, dump raw output to a file for inspection
+    if not objs:
+        with open(os.path.join(LOG_DIR, f"pano_show_match_{ip}.txt"), "w", encoding="utf-8") as f:
+            f.write(out)
     return objs
 
-
 def pano_get_rules_for_object(conn, obj_name):
-    """
-    Panorama config mode, 'set' format, 'show | match <obj_name>'.
-    Keep only security rule lines, de-dup.
-    Returns [{'obj':obj_name,'dg':..., 'where': pre-rulebase|post-rulebase|rulebase, 'rule':..., 'field':'source'|'destination'}]
-    """
+    """Panorama config mode, 'set' format, 'show | match <obj_name>'."""
     conn.config_mode()
     conn.send_command("set cli pager off", expect_string=r"#")
     conn.send_command("set cli config-output-format set", expect_string=r"#")
@@ -116,18 +121,17 @@ def pano_get_rules_for_object(conn, obj_name):
             continue
         parts = s.split()
         try:
-            dg     = parts[2]
-            where  = parts[3]  # pre-rulebase | post-rulebase | rulebase
-            rule   = parts[parts.index("rules")+1]
-            field  = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
-            key    = (obj_name, dg, where, rule, field)
+            dg = parts[2]
+            where = parts[3]  # pre-rulebase | post-rulebase | rulebase
+            rule = parts[parts.index("rules") + 1]
+            field = "source" if " source " in f" {s} " else ("destination" if " destination " in f" {s} " else "unknown")
+            key = (obj_name, dg, where, rule, field)
             if key not in seen:
                 seen.add(key)
                 refs.append({"obj": obj_name, "dg": dg, "where": where, "rule": rule, "field": field})
         except Exception:
             continue
     return refs
-
 
 # -------------------- FIREWALL LOOKUPS --------------------
 
@@ -143,9 +147,7 @@ def discover_vrs(conn):
             vrs.append(parts[3])
     return sorted(set(vrs))
 
-
 def fib_lookup(conn, ip):
-    """Return (interface, vr_used). Try VR_CANDIDATES then discovered VRs. Prefer '[selected]'."""
     tried = set()
     for vr in VR_CANDIDATES:
         iface = _fib_try(conn, vr, ip)
@@ -159,7 +161,6 @@ def fib_lookup(conn, ip):
         if iface:
             return iface, vr
     return None, None
-
 
 def _fib_try(conn, vr, ip):
     out = conn.send_command(f"test routing fib-lookup virtual-router {vr} ip {ip}", read_timeout=45)
@@ -177,7 +178,6 @@ def _fib_try(conn, vr, ip):
                 selected = iface
     return selected or first
 
-
 def get_zone_for_interface(conn, interface):
     if not interface:
         return None
@@ -187,7 +187,6 @@ def get_zone_for_interface(conn, interface):
             after = line.split("Zone:", 1)[1].strip()
             return after.split(",", 1)[0].strip()
     return None
-
 
 # -------------------- MAIN --------------------
 
@@ -206,6 +205,7 @@ def main():
             print(f"    - {o['name']}  ({o['scope']})")
     else:
         print("[!] No address objects found for this IP on Panorama.")
+        print(f"    Raw output saved to {os.path.join(LOG_DIR, f'pano_show_match_{IP_TO_CHECK}.txt')}")
 
     # For each object, find rules that reference it (handles MULTIPLE objects)
     all_refs = []
@@ -261,7 +261,6 @@ def main():
     for r in rows:
         print(f"{r['fw']:<18} {r['ip']:<15} {r['vr']:<16} {r['iface']:<18} {r['zone']:<24}")
     print("\nDone.\n")
-
 
 if __name__ == "__main__":
     main()
