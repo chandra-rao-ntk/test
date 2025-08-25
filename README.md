@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # Read-only, efficient PAN workflow:
 # - Panorama: objects+rules for multiple IPs (single session)
-# - Firewalls: single session per FW; discover VRs dynamically; fib-lookup for ALL IPs; zone caching
-# - Checks ALL FWs; star (★) rows whose DG has rules for that IP
+# - Firewalls: single session per FW; discover VRs (op-mode first), FIB all IPs, zone caching
+# - Shows ALL FWs; star (★) rows whose DG has rules for that IP
 # - Logs in ./logs/, stitched report saved there too
 
 import os
+import re
 import logging
 import datetime as dt
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,8 +55,7 @@ DG_TO_FIREWALLS = {
     "FBCH03VPFW": ["10.212.240.157"],
 }
 
-# Concurrency (one session per FW)
-MAX_WORKERS = 10
+MAX_WORKERS = 10  # one session per FW
 
 # Logging
 LOG_DIR = "./logs"
@@ -101,7 +101,7 @@ def connect_panos(host, title=""):
         # set once at session start (avoid "Invalid syntax" when inside config-mode)
         conn.send_command("set cli config-output-format set", expect_string=r">|#")
         conn.send_command("set cli pager off", expect_string=r">|#")
-        conn.send_command("set cli terminal width 500", expect_string=r">|#")
+        conn.send_command("set cli terminal width 999", expect_string=r">|#")
         return conn
     except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
         raise RuntimeError(f"Failed to connect to {title or host}: {e}")
@@ -168,28 +168,41 @@ def pano_get_rules_for_object(conn, obj_name):
 
 def discover_vrs(conn):
     """
-    Return a sorted list of VR names present on the firewall.
-    Looks for 'set network virtual-router <VR>' lines in set-format config.
+    Discover VR names primarily from **op-mode** to avoid config-mode quirks.
+    1) 'show routing summary' → parse tokens after 'virtual-router'
+    2) If empty, fallback to config-mode 'show | match "set network virtual-router "'
+    3) If still empty, use ['default']
     """
-    conn.config_mode()
-    # Try strict match first; if empty, try looser match to handle odd formatting
-    out = conn.send_command('show | match "set network virtual-router "', expect_string=r"#", read_timeout=60)
-    if not out.strip():
-        out = conn.send_command('show | match "virtual-router "', expect_string=r"#", read_timeout=60)
-    conn.exit_config_mode()
-
     vrs = set()
-    for line in out.splitlines():
-        parts = line.strip().split()
-        # Expected: set network virtual-router <VR> ...
-        if len(parts) >= 4 and parts[:3] == ["set", "network", "virtual-router"]:
-            vrs.add(parts[3])
+
+    # 1) op-mode: show routing summary
+    out1 = conn.send_command("show routing summary", read_timeout=30)
+    for line in out1.splitlines():
+        s = line.strip()
+        # match "... virtual-router <name> ..." or "... virtual router <name> ..."
+        m = re.search(r"\bvirtual[-\s]?router\s+([A-Za-z0-9._-]+)", s, re.IGNORECASE)
+        if m:
+            vrs.add(m.group(1))
+
+    # 2) fallback: config-mode set-format scrape
+    if not vrs:
+        conn.config_mode()
+        out2 = conn.send_command('show | match "set network virtual-router "', expect_string=r"#", read_timeout=60)
+        conn.exit_config_mode()
+        for line in out2.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 4 and parts[:3] == ["set", "network", "virtual-router"]:
+                vrs.add(parts[3])
+
+    # 3) last resort
+    if not vrs:
+        vrs.add("default")
+
     return sorted(vrs)
 
 
-def _clean_iface(token: str) -> str:
-    # sanitize trailing punctuation from FIB output
-    return token.strip().strip(",;:")
+def _clean_iface(tok: str) -> str:
+    return tok.strip().strip(",;:")
 
 
 def fib_try(conn, vr, ip):
@@ -212,7 +225,7 @@ def fib_try(conn, vr, ip):
 def fib_lookup_multi(conn, ips):
     """
     Efficient multi-IP routing:
-      - Discover VR list once
+      - Discover VR list once (op-mode)
       - Try each VR for unresolved IPs until an interface is found
     Returns dict ip -> (iface, vr)
     """
@@ -220,9 +233,6 @@ def fib_lookup_multi(conn, ips):
     unresolved = set(ips)
 
     vrs = discover_vrs(conn)
-    if not vrs:
-        # last-resort tiny set; should rarely be needed
-        vrs = ["default"]
 
     for vr in vrs:
         if not unresolved:
@@ -287,7 +297,7 @@ def get_zone_for_interface(conn, fw_host: str, interface: str):
 def fw_worker_all_ips(fw_ip, fw_name, ip_list):
     """
     Single connection per firewall:
-      - discover VRs once
+      - discover VRs (op-mode) once
       - fib-lookup for ALL IPs
       - cache interface->zone so each interface is resolved once
     Returns: dict[ip] = {fw, ip, vr, iface, zone, err}
@@ -339,7 +349,7 @@ def main():
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     results_path = os.path.join(LOG_DIR, f"results_{ts}.txt")
 
-    print(f"\n=== PAN Multi-IP Lookup (single login per firewall; dynamic VRs) ===")
+    print(f"\n=== PAN Multi-IP Lookup (single login per firewall; op-mode VR discovery) ===")
     print(f"Panorama: {PANORAMA_HOST}")
     print(f"IPs: {', '.join(IPS_TO_CHECK)}")
     print(f"Logs dir: {os.path.abspath(LOG_DIR)}\n")
