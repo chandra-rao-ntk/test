@@ -7,8 +7,8 @@ import logging
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
 # ===== USER SETTINGS (same creds for Panorama & FWs) =====
-USERNAME = "crao"
-PASSWORD = "QWErty430$QWErty430$"
+USERNAME = ""
+PASSWORD = ""
 
 IP_TO_CHECK = "10.232.64.10"
 
