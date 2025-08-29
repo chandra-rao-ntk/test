@@ -1,0 +1,213 @@
+===== IP: 10.224.160.85 =====
+Address object(s):
+  - PV0400NEWA001 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_PROD (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PV0235WSVC_SVRS       fields=[source] via=[PV0400NEWA001]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PVWSVC_SVRS           fields=[source] via=[PV0400NEWA001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=FLAGSTAR_TO_NAS                          fields=[destination] via=[PV0400NEWA001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_PROD]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=400NYDC-EDGE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_NAUTILUS              fields=[source] via=[PV0400NEWA001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=FLAGSTAR_TO_NAS                          fields=[destination] via=[PV0400NEWA001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group:
+  - DG=400NYDC-EDGE   pre-rulebase rule=PV0400NEWA001_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWA001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=PV0400NEWA001_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWA001]
+
+===== IP: 10.224.160.86 =====
+Address object(s):
+  - PV0400NEWA002 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_PROD (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PV0235WSVC_SVRS       fields=[source] via=[PV0400NEWA002]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PVWSVC_SVRS           fields=[source] via=[PV0400NEWA002]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_PROD]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=400NYDC-EDGE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_NAUTILUS              fields=[source] via=[PV0400NEWA002]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group:
+  - DG=400NYDC-EDGE   pre-rulebase rule=PV0400NEWA002_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWA002]
+  - DG=621OHDC-EDGE   pre-rulebase rule=PV0400NEWA002_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWA002]
+
+===== IP: 10.224.153.147 =====
+Address object(s):
+  - PV0400NEWU001 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_PROD (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PV0235WSVC_SVRS       fields=[source] via=[PV0400NEWU001]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_PVWSVC_SVRS           fields=[source] via=[PV0400NEWU001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_PROD]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=400NYDC-EDGE   pre-rulebase rule=PROD_NEWGEN_SVR_TO_NAUTILUS              fields=[source] via=[PV0400NEWU001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group:
+  - DG=400NYDC-EDGE   pre-rulebase rule=PV0400NEWU001_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWU001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=PV0400NEWU001_TO_FISERV_SRC_NAT          fields=[unknown] via=[PV0400NEWU001]
+
+===== IP: 10.224.153.145 =====
+Address object(s):
+  - PV0400NEWGED001 (shared)
+Address-group(s) containing the object(s):
+  - NEWGEN_SERVERS (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=DR_IDQ_INFORMATICA_TO_DBA                fields=[destination] via=[PV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=INFORMATICA_TO_LMS_SQL                   fields=[destination] via=[PV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=NEWGEN_TO_OID_AND_ORACLE_DB              fields=[destination,source] via=[PV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=POWERCENTER_TO_NEWGEN                    fields=[destination] via=[PV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_AIM_TO_DATABASE                     fields=[destination] via=[PV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_IDQ_INFORMATICA_TO_DBA              fields=[destination] via=[PV0400NEWGED001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_NEWGEN                       fields=[destination] via=[NEWGEN_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=DR_IDQ_INFORMATICA_TO_DBA                fields=[destination] via=[PV0400NEWGED001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_NEWGEN                       fields=[destination] via=[NEWGEN_SERVERS]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.224.153.144 =====
+Address object(s):
+  - PR0400NEWD102-SQLCLUSTER (shared)
+  - PC0400NEWD101 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SQL_SERVERS (shared)
+  - NEWGEN_SERVERS (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=400NYDC-CORE   pre-rulebase rule=DR_IDQ_INFORMATICA_TO_DBA                fields=[destination] via=[PC0400NEWD101]
+  - DG=400NYDC-CORE   pre-rulebase rule=INFORMATICA_TO_LMS_SQL                   fields=[destination] via=[PC0400NEWD101]
+  - DG=400NYDC-CORE   pre-rulebase rule=NEWGEN_TO_OID_AND_ORACLE_DB              fields=[destination,source] via=[PC0400NEWD101,PR0400NEWD102-SQLCLUSTER]
+  - DG=400NYDC-CORE   pre-rulebase rule=POWERCENTER_TO_NEWGEN                    fields=[destination] via=[PC0400NEWD101]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_AIM_TO_DATABASE                     fields=[destination] via=[PC0400NEWD101]
+  - DG=400NYDC-CORE   pre-rulebase rule=PROD_IDQ_INFORMATICA_TO_DBA              fields=[destination] via=[PC0400NEWD101]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_NEWGEN                       fields=[destination] via=[NEWGEN_SERVERS]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=DR_IDQ_INFORMATICA_TO_DBA                fields=[destination] via=[PC0400NEWD101]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_NEWGEN                       fields=[destination] via=[NEWGEN_SERVERS]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+NAT rules referencing the IP/object/group:
+  - DG=400NYDC-EDGE   pre-rulebase rule=PC0400NEWD101_TO_FISERV_SRC_NAT-1        fields=[unknown] via=[PC0400NEWD101]
+
+===== IP: 10.225.162.17 =====
+Address object(s):
+  - QV0400NEWA003 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_QA (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QVWSVC_SVRS             fields=[source] via=[QV0400NEWA003]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_QA]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.162.15 =====
+Address object(s):
+  - QV0400NEWA001 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_QA (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QV0235WSVC_SVRS         fields=[source] via=[QV0400NEWA001]
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QVWSVC_SVRS             fields=[source] via=[QV0400NEWA001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_QA]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.162.16 =====
+Address object(s):
+  - QV0400NEWA002 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_QA (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QV0235WSVC_SVRS         fields=[source] via=[QV0400NEWA002]
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QVWSVC_SVRS             fields=[source] via=[QV0400NEWA002]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_QA]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.153.241 =====
+Address object(s):
+  - QV0400NEWD003 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SQL_SERVERS (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=400NYDC-CORE   pre-rulebase rule=INFORMATICA_TO_LMS_SQL                   fields=[destination] via=[QV0400NEWD003]
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_AIM_TO_DATABASE                       fields=[destination] via=[QV0400NEWD003]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.153.242 =====
+Address object(s):
+  - QV0400NEWGED001 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SQL_SERVERS (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=400NYDC-CORE   pre-rulebase rule=ORACLE_CLIENTS_TO_OID_SERVERS            fields=[source] via=[QV0400NEWGED001]
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_AIM_TO_DATABASE                       fields=[destination] via=[QV0400NEWGED001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.153.238 =====
+Address object(s):
+  - QR0400NEWD102 (shared)
+Address-group(s) containing the object(s): <none>
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=ORACLE_CLIENTS_TO_OID_SERVERS            fields=[source] via=[QR0400NEWD102]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.153.243 =====
+Address object(s):
+  - QV0400NEWU001 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_QA (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QV0235WSVC_SVRS         fields=[source] via=[QV0400NEWU001]
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QVWSVC_SVRS             fields=[source] via=[QV0400NEWU001]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_QA]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.225.153.244 =====
+Address object(s):
+  - QV0400NEWU003 (shared)
+Address-group(s) containing the object(s):
+  - NYCB_SERVER_INTERNET (shared)
+  - NEWGEN_QA (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=QA_NEWGEN_SVR_TO_QVWSVC_SVRS             fields=[source] via=[QV0400NEWU003]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NEWGEN_TO_INET                           fields=[source] via=[NEWGEN_QA]
+  - DG=400NYDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+  - DG=621OHDC-EDGE   pre-rulebase rule=NYCB_SERVER_INTERNET_POLICY              fields=[source] via=[NYCB_SERVER_INTERNET]
+NAT rules referencing the IP/object/group: <none>
+
+===== IP: 10.124.16.208 =====
+Address object(s):
+  - RV0621NEWD001 (shared)
+Address-group(s) containing the object(s):
+  - DATABASE_SERVERS_CLEVELAND-SD-LEGACY (shared)
+  - NYCB_SQL_SERVERS (shared)
+Security rules referencing the IP/object/group:
+  - DG=400NYDC-CORE   pre-rulebase rule=CLE_TO_CMK_PCI_LOG_SHIPPING              fields=[source] via=[DATABASE_SERVERS_CLEVELAND-SD-LEGACY]
+  - DG=400NYDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=400NYDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=COGNOS-DR_TO_DB_SERVERS                  fields=[destination] via=[RV0621NEWD001]
+  - DG=621OHDC-CORE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+  - DG=621OHDC-CORE   pre-rulebase rule=INFORMATICA-DR_TO_DB_SERVERS             fields=[destination] via=[RV0621NEWD001]
+  - DG=621OHDC-EDGE   pre-rulebase rule=DBA_TEAM_TO_SQL_SSRS                     fields=[destination] via=[NYCB_SQL_SERVERS]
+NAT rules referencing the IP/object/group: <none>
